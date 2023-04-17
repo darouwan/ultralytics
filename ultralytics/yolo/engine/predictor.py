@@ -1,4 +1,4 @@
-# Ultralytics YOLO 🚀, AGPL-3.0 license
+# Ultralytics YOLO 🚀, GPL-3.0 license
 """
 Run prediction on images, videos, directories, globs, YouTube, webcam, streams, etc.
 
@@ -107,11 +107,9 @@ class BasePredictor:
         callbacks.add_integration_callbacks(self)
 
     def preprocess(self, img):
-        """Prepares input image before inference."""
         pass
 
     def write_results(self, idx, results, batch):
-        """Write inference results to a file or directory."""
         p, im, _ = batch
         log_string = ''
         if len(im.shape) == 3:
@@ -129,14 +127,11 @@ class BasePredictor:
         log_string += result.verbose()
 
         if self.args.save or self.args.show:  # Add bbox to image
-            plot_args = dict(line_width=self.args.line_thickness,
-                             boxes=self.args.boxes,
-                             conf=self.args.show_conf,
-                             labels=self.args.show_labels)
+            plot_args = dict(line_width=self.args.line_thickness, boxes=self.args.boxes)
             if not self.args.retina_masks:
                 plot_args['im_gpu'] = im[idx]
             self.plotted_img = result.plot(**plot_args)
-        # Write
+        # write
         if self.args.save_txt:
             result.save_txt(f'{self.txt_path}.txt', save_conf=self.args.save_conf)
         if self.args.save_crop:
@@ -145,11 +140,9 @@ class BasePredictor:
         return log_string
 
     def postprocess(self, preds, img, orig_img):
-        """Post-processes predictions for an image and returns them."""
         return preds
 
     def __call__(self, source=None, model=None, stream=False):
-        """Performs inference on an image or stream."""
         self.stream = stream
         if stream:
             return self.stream_inference(source, model)
@@ -157,13 +150,12 @@ class BasePredictor:
             return list(self.stream_inference(source, model))  # merge list of Result into one
 
     def predict_cli(self, source=None, model=None):
-        """Method used for CLI prediction. It uses always generator as outputs as not required by CLI mode."""
+        # Method used for CLI prediction. It uses always generator as outputs as not required by CLI mode
         gen = self.stream_inference(source, model)
         for _ in gen:  # running CLI inference without accumulating any outputs (do not modify)
             pass
 
     def setup_source(self, source):
-        """Sets up source and inference mode."""
         self.imgsz = check_imgsz(self.args.imgsz, stride=self.model.stride, min_dim=2)  # check image size
         if self.args.task == 'classify':
             transforms = getattr(self.model.model, 'transforms', classify_transforms(self.imgsz[0]))
@@ -184,20 +176,19 @@ class BasePredictor:
 
     @smart_inference_mode()
     def stream_inference(self, source=None, model=None):
-        """Streams real-time inference on camera feed and saves results to file."""
         if self.args.verbose:
             LOGGER.info('')
 
-        # Setup model
+        # setup model
         if not self.model:
             self.setup_model(model)
-        # Setup source every time predict is called
+        # setup source every time predict is called
         self.setup_source(source if source is not None else self.args.source)
 
-        # Check if save_dir/ label file exists
+        # check if save_dir/ label file exists
         if self.args.save or self.args.save_txt:
             (self.save_dir / 'labels' if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
-        # Warmup model
+        # warmup model
         if not self.done_warmup:
             self.model.warmup(imgsz=(1 if self.model.pt or self.model.triton else self.dataset.bs, 3, *self.imgsz))
             self.done_warmup = True
@@ -210,22 +201,22 @@ class BasePredictor:
             path, im, im0s, vid_cap, s = batch
             visualize = increment_path(self.save_dir / Path(path).stem, mkdir=True) if self.args.visualize else False
 
-            # Preprocess
+            # preprocess
             with self.dt[0]:
                 im = self.preprocess(im)
                 if len(im.shape) == 3:
                     im = im[None]  # expand for batch dim
 
-            # Inference
+            # inference
             with self.dt[1]:
                 preds = self.model(im, augment=self.args.augment, visualize=visualize)
 
-            # Postprocess
+            # postprocess
             with self.dt[2]:
                 self.results = self.postprocess(preds, im, im0s)
             self.run_callbacks('on_predict_postprocess_end')
 
-            # Visualize, save, write results
+            # visualize, save, write results
             n = len(im)
             for i in range(n):
                 self.results[i].speed = {
@@ -270,7 +261,6 @@ class BasePredictor:
         self.run_callbacks('on_predict_end')
 
     def setup_model(self, model, verbose=True):
-        """Initialize YOLO model with given parameters and set it to evaluation mode."""
         device = select_device(self.args.device, verbose=verbose)
         model = model or self.args.model
         self.args.half &= device.type != 'cpu'  # half precision only supported on CUDA
@@ -285,7 +275,6 @@ class BasePredictor:
         self.model.eval()
 
     def show(self, p):
-        """Display an image in a window using OpenCV imshow()."""
         im0 = self.plotted_img
         if platform.system() == 'Linux' and p not in self.windows:
             self.windows.append(p)
@@ -295,9 +284,8 @@ class BasePredictor:
         cv2.waitKey(500 if self.batch[4].startswith('image') else 1)  # 1 millisecond
 
     def save_preds(self, vid_cap, idx, save_path):
-        """Save video predictions as mp4 at specified path."""
         im0 = self.plotted_img
-        # Save imgs
+        # save imgs
         if self.dataset.mode == 'image':
             cv2.imwrite(save_path, im0)
         else:  # 'video' or 'stream'
@@ -316,7 +304,6 @@ class BasePredictor:
             self.vid_writer[idx].write(im0)
 
     def run_callbacks(self, event: str):
-        """Runs all registered callbacks for a specific event."""
         for callback in self.callbacks.get(event, []):
             callback(self)
 
