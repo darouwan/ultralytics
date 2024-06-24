@@ -1,12 +1,12 @@
 ---
 comments: true
-Description: Learn how to deploy YOLOv8 models on Amazon SageMaker Endpoints. This guide covers the essentials of AWS environment setup, model preparation, and deployment using AWS CloudFormation and the AWS Cloud Development Kit (CDK).
-keywords: YOLOv8, Ultralytics, Amazon SageMaker, AWS, CloudFormation, AWS CDK, PyTorch, Model Deployment, Machine Learning, Computer Vision
+description: Learn step-by-step how to deploy Ultralytics' YOLOv8 on Amazon SageMaker Endpoints, from setup to testing, for powerful real-time inference with AWS services.
+keywords: YOLOv8, Amazon SageMaker, AWS, Ultralytics, machine learning, computer vision, model deployment, AWS CloudFormation, AWS CDK, real-time inference
 ---
 
 # A Guide to Deploying YOLOv8 on Amazon SageMaker Endpoints
 
-Deploying advanced computer vision models like [Ultralytics’ YOLOv8](https://github.com/ultralytics/ultralytics) on Amazon SageMaker Endpoints opens up a wide range of possibilities for various machine learning applications. The key to effectively using these models lies in understanding their setup, configuration, and deployment processes. YOLOv8 becomes even more powerful when integrated seamlessly with Amazon SageMaker, a robust and scalable machine learning service by AWS.
+Deploying advanced computer vision models like [Ultralytics' YOLOv8](https://github.com/ultralytics/ultralytics) on Amazon SageMaker Endpoints opens up a wide range of possibilities for various machine learning applications. The key to effectively using these models lies in understanding their setup, configuration, and deployment processes. YOLOv8 becomes even more powerful when integrated seamlessly with Amazon SageMaker, a robust and scalable machine learning service by AWS.
 
 This guide will take you through the process of deploying YOLOv8 PyTorch models on Amazon SageMaker Endpoints step by step. You'll learn the essentials of preparing your AWS environment, configuring the model appropriately, and using tools like AWS CloudFormation and the AWS Cloud Development Kit (CDK) for deployment.
 
@@ -32,13 +32,13 @@ First, ensure you have the following prerequisites in place:
 
 - An AWS Account: If you don't already have one, sign up for an AWS account.
 
-- Configured IAM Roles: You’ll need an IAM role with the necessary permissions for Amazon SageMaker, AWS CloudFormation, and Amazon S3. This role should have policies that allow it to access these services.
+- Configured IAM Roles: You'll need an IAM role with the necessary permissions for Amazon SageMaker, AWS CloudFormation, and Amazon S3. This role should have policies that allow it to access these services.
 
 - AWS CLI: If not already installed, download and install the AWS Command Line Interface (CLI) and configure it with your account details. Follow [the AWS CLI instructions](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) for installation.
 
 - AWS CDK: If not already installed, install the AWS Cloud Development Kit (CDK), which will be used for scripting the deployment. Follow [the AWS CDK instructions](https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_install) for installation.
 
-- Adequate Service Quota: Confirm that you have sufficient quotas for two separate resources in Amazon SageMaker: one for ml.m5.4xlarge for endpoint usage and another for ml.m5.4xlarge for notebook instance usage. Each of these requires a minimum of one quota value. If your current quotas are below this requirement, it's important to request an increase for each. You can request a quota increase by following the detailed instructions in the [AWS Service Quotas documentation](https://docs.aws.amazon.com/servicequotas/latest/userguide/request-quota-increase.html#quota-console-increase).
+- Adequate Service Quota: Confirm that you have sufficient quotas for two separate resources in Amazon SageMaker: one for `ml.m5.4xlarge` for endpoint usage and another for `ml.m5.4xlarge` for notebook instance usage. Each of these requires a minimum of one quota value. If your current quotas are below this requirement, it's important to request an increase for each. You can request a quota increase by following the detailed instructions in the [AWS Service Quotas documentation](https://docs.aws.amazon.com/servicequotas/latest/userguide/request-quota-increase.html#quota-console-increase).
 
 ### Step 2: Clone the YOLOv8 SageMaker Repository
 
@@ -115,18 +115,24 @@ After creating the AWS CloudFormation Stack, the next step is to deploy YOLOv8.
 - Access and Modify inference.py: After opening the SageMaker notebook instance in Jupyter, locate the inference.py file. Edit the output_fn function in inference.py as shown below and save your changes to the script, ensuring that there are no syntax errors.
 
 ```python
+import json
+
+
 def output_fn(prediction_output, content_type):
+    """Formats model outputs as JSON string, extracting attributes like boxes, masks, keypoints."""
     print("Executing output_fn from inference.py ...")
     infer = {}
     for result in prediction_output:
-        if 'boxes' in result._keys and result.boxes is not None:
-            infer['boxes'] = result.boxes.numpy().data.tolist()
-        if 'masks' in result._keys and result.masks is not None:
-            infer['masks'] = result.masks.numpy().data.tolist()
-        if 'keypoints' in result._keys and result.keypoints is not None:
-            infer['keypoints'] = result.keypoints.numpy().data.tolist()
-        if 'probs' in result._keys and result.probs is not None:
-            infer['probs'] = result.probs.numpy().data.tolist()
+        if result.boxes is not None:
+            infer["boxes"] = result.boxes.numpy().data.tolist()
+        if result.masks is not None:
+            infer["masks"] = result.masks.numpy().data.tolist()
+        if result.keypoints is not None:
+            infer["keypoints"] = result.keypoints.numpy().data.tolist()
+        if result.obb is not None:
+            infer["obb"] = result.obb.numpy().data.tolist()
+        if result.probs is not None:
+            infer["probs"] = result.probs.numpy().data.tolist()
     return json.dumps(infer)
 ```
 
@@ -138,7 +144,7 @@ Now that your YOLOv8 model is deployed, it's important to test its performance a
 
 - Open the Test Notebook: In the same Jupyter environment, locate and open the 2_TestEndpoint.ipynb notebook, also in the sm-notebook directory.
 
-- Run the Test Notebook: Follow the instructions within the notebook to test the deployed SageMaker endpoint. This includes sending an image to the endpoint and running inferences. Then, you’ll plot the output to visualize the model’s performance and accuracy, as shown below.
+- Run the Test Notebook: Follow the instructions within the notebook to test the deployed SageMaker endpoint. This includes sending an image to the endpoint and running inferences. Then, you'll plot the output to visualize the model's performance and accuracy, as shown below.
 
 <p align="center">
   <img width="640" src="https://d2908q01vomqb2.cloudfront.net/f1f836cb4ea6efb2a0b1b99f41ad8b103eff4b59/2023/02/28/ML13353_InferenceOutput.png" alt="Testing Results YOLOv8">

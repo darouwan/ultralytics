@@ -1,14 +1,25 @@
 ---
 comments: true
-description: Explore the Carparts Segmentation using Ultralytics YOLOv8 Dataset, a large-scale benchmark for Vehicle Maintenance, and learn how to train a YOLO model using it.
-keywords: CarParts Segmentation Dataset, Ultralytics, Vehicle Analytics, Spare parts Detection, YOLO model, object detection, object tracking
+description: Explore Roboflow's Carparts Segmentation Dataset for automotive AI applications. Enhance your segmentation models with rich, annotated data.
+keywords: Carparts Segmentation Dataset, Roboflow, computer vision, automotive AI, vehicle maintenance, Ultralytics
 ---
 
-# Carparts Segmentation Dataset
+# Roboflow Universe Carparts Segmentation Dataset
 
-The [Roboflow](https://roboflow.com/?ref=ultralytics) Carparts Segmentation Dataset is a curated collection of images and videos designed for computer vision applications, specifically focusing on segmentation tasks related to car parts. This dataset provides a diverse set of visuals captured from multiple perspectives, offering valuable annotated examples for training and testing segmentation models.
+The [Roboflow](https://roboflow.com/?ref=ultralytics) [Carparts Segmentation Dataset](https://universe.roboflow.com/gianmarco-russo-vt9xr/car-seg-un1pm) is a curated collection of images and videos designed for computer vision applications, specifically focusing on segmentation tasks related to car parts. This dataset provides a diverse set of visuals captured from multiple perspectives, offering valuable annotated examples for training and testing segmentation models.
 
 Whether you're working on automotive research, developing AI solutions for vehicle maintenance, or exploring computer vision applications, the Carparts Segmentation Dataset serves as a valuable resource for enhancing accuracy and efficiency in your projects.
+
+<p align="center">
+  <br>
+  <iframe loading="lazy" width="720" height="405" src="https://www.youtube.com/embed/eHuzCNZeu0g"
+    title="YouTube video player" frameborder="0"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowfullscreen>
+  </iframe>
+  <br>
+  <strong>Watch:</strong> Carparts Instance Segmentation Using Ultralytics HUB
+</p>
 
 ## Dataset Structure
 
@@ -44,10 +55,10 @@ To train Ultralytics YOLOv8n model on the Carparts Segmentation dataset for 100 
         from ultralytics import YOLO
 
         # Load a model
-        model = YOLO('yolov8n-seg.pt')  # load a pretrained model (recommended for training)
+        model = YOLO("yolov8n-seg.pt")  # load a pretrained model (recommended for training)
 
         # Train the model
-        results = model.train(data='carparts-seg.yaml', epochs=100, imgsz=640)
+        results = model.train(data="carparts-seg.yaml", epochs=100, imgsz=640)
         ```
 
     === "CLI"
