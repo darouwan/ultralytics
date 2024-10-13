@@ -457,11 +457,12 @@ class Results(SimpleClass):
         boxes=True,
         masks=True,
         probs=True,
-        color_list=None,
         show=False,
         save=False,
         filename=None,
         color_mode="class",
+        color_list=None,
+        **kwargs,  # deprecated args TODO: remove support in 8.2
     ):
         """
         Plots detection results on an input RGB image.
@@ -485,6 +486,13 @@ class Results(SimpleClass):
             show (bool): Whether to display the annotated image directly.
             save (bool): Whether to save the annotated image to `filename`.
             filename (str): Filename to save image to if save is True.
+            labels (bool): Whether to plot labels of bounding boxes.
+            boxes (bool): Whether to plot bounding boxes.
+            masks (bool): Whether to plot masks.
+            probs (bool): Whether to plot classification probabilities.
+            show (bool): Whether to display the annotated image.
+            save (bool): Whether to save the annotated image.
+            filename (str | None): Filename to save image if save is True.
             color_mode (bool): Specify the color mode, e.g., 'instance' or 'class'. Default to 'class'.
 
         Returns:
