@@ -169,3 +169,6 @@ pnnx*
 
 # calibration image
 calibration_*.npy
+
+# Projects folder
+projects/
