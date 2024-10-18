@@ -172,3 +172,6 @@ calibration_*.npy
 
 # Projects folder
 projects/
+train*.py
+val*.py
+predict*.py
