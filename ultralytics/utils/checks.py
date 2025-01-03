@@ -23,7 +23,6 @@ from ultralytics.utils import (
     AUTOINSTALL,
     IS_COLAB,
     IS_GIT_DIR,
-    IS_JUPYTER,
     IS_KAGGLE,
     IS_PIP_PACKAGE,
     LINUX,
@@ -277,7 +276,7 @@ def check_latest_pypi_version(package_name="ultralytics"):
         response = requests.get(f"https://pypi.org/pypi/{package_name}/json", timeout=3)
         if response.status_code == 200:
             return response.json()["info"]["version"]
-    except:  # noqa E722
+    except Exception:
         return None
 
 
@@ -299,7 +298,7 @@ def check_pip_update_available():
                     f"Update with 'pip install -U ultralytics'"
                 )
                 return True
-        except:  # noqa E722
+        except Exception:
             pass
     return False
 
@@ -335,7 +334,7 @@ def check_font(font="Arial.ttf"):
         return file
 
 
-def check_python(minimum: str = "3.8.0", hard: bool = True, verbose: bool = True) -> bool:
+def check_python(minimum: str = "3.8.0", hard: bool = True, verbose: bool = False) -> bool:
     """
     Check current python version against the required minimum version.
 
@@ -435,6 +434,7 @@ def check_torchvision():
     """
     # Compatibility table
     compatibility_table = {
+        "2.5": ["0.20"],
         "2.4": ["0.19"],
         "2.3": ["0.18"],
         "2.2": ["0.17"],
@@ -569,11 +569,8 @@ def check_yolo(verbose=True, device=""):
 
     from ultralytics.utils.torch_utils import select_device
 
-    if IS_JUPYTER:
-        if check_requirements("wandb", install=False):
-            os.system("pip uninstall -y wandb")  # uninstall wandb: unwanted account creation prompt with infinite hang
-        if IS_COLAB:
-            shutil.rmtree("sample_data", ignore_errors=True)  # remove colab /sample_data directory
+    if IS_COLAB:
+        shutil.rmtree("sample_data", ignore_errors=True)  # remove colab /sample_data directory
 
     if verbose:
         # System info
@@ -673,8 +670,22 @@ def check_amp(model):
     from ultralytics.utils.torch_utils import autocast
 
     device = next(model.parameters()).device  # get model device
+    prefix = colorstr("AMP: ")
     if device.type in {"cpu", "mps"}:
         return False  # AMP only used on CUDA devices
+    else:
+        # GPUs that have issues with AMP
+        pattern = re.compile(
+            r"(nvidia|geforce|quadro|tesla).*?(1660|1650|1630|t400|t550|t600|t1000|t1200|t2000|k40m)", re.IGNORECASE
+        )
+
+        gpu = torch.cuda.get_device_name(device)
+        if bool(pattern.search(gpu)):
+            LOGGER.warning(
+                f"{prefix}checks failed ❌. AMP training on {gpu} GPU may cause "
+                f"NaN losses or zero-mAP results, so AMP will be disabled during training."
+            )
+            return False
 
     def amp_allclose(m, im):
         """All close FP32 vs AMP results."""
@@ -687,8 +698,7 @@ def check_amp(model):
         return a.shape == b.shape and torch.allclose(a, b.float(), atol=0.5)  # close to 0.5 absolute tolerance
 
     im = ASSETS / "bus.jpg"  # image to check
-    prefix = colorstr("AMP: ")
-    LOGGER.info(f"{prefix}running Automatic Mixed Precision (AMP) checks with YOLO11n...")
+    LOGGER.info(f"{prefix}running Automatic Mixed Precision (AMP) checks...")
     warning_msg = "Setting 'amp=True'. If you experience zero-mAP or NaN losses you can disable AMP with amp=False."
     try:
         from ultralytics import YOLO
@@ -696,11 +706,13 @@ def check_amp(model):
         assert amp_allclose(YOLO("yolo11n.pt"), im)
         LOGGER.info(f"{prefix}checks passed ✅")
     except ConnectionError:
-        LOGGER.warning(f"{prefix}checks skipped ⚠️, offline and unable to download YOLO11n. {warning_msg}")
+        LOGGER.warning(
+            f"{prefix}checks skipped ⚠️. " f"Offline and unable to download YOLO11n for AMP checks. {warning_msg}"
+        )
     except (AttributeError, ModuleNotFoundError):
         LOGGER.warning(
             f"{prefix}checks skipped ⚠️. "
-            f"Unable to load YOLO11n due to possible Ultralytics package modifications. {warning_msg}"
+            f"Unable to load YOLO11n for AMP checks due to possible Ultralytics package modifications. {warning_msg}"
         )
     except AssertionError:
         LOGGER.warning(
@@ -715,7 +727,7 @@ def git_describe(path=ROOT):  # path must be a directory
     """Return human-readable git description, i.e. v5.0-5-g3e25f1e https://git-scm.com/docs/git-describe."""
     try:
         return subprocess.check_output(f"git -C {path} describe --tags --long --always", shell=True).decode()[:-1]
-    except:  # noqa E722
+    except Exception:
         return ""
 
 
