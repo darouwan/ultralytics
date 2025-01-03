@@ -27,7 +27,7 @@ The Coral Edge TPU is a compact device that adds an Edge TPU coprocessor to your
 
 ## Boost Raspberry Pi Model Performance with Coral Edge TPU
 
-Many people want to run their models on an embedded or mobile device such as a Raspberry Pi, since they are very power efficient and can be used in many different applications. However, the inference performance on these devices is usually poor even when using formats like [onnx](../integrations/onnx.md) or [openvino](../integrations/openvino.md). The Coral Edge TPU is a great solution to this problem, since it can be used with a Raspberry Pi and accelerate inference performance greatly.
+Many people want to run their models on an embedded or mobile device such as a Raspberry Pi, since they are very power efficient and can be used in many different applications. However, the inference performance on these devices is usually poor even when using formats like [ONNX](../integrations/onnx.md) or [OpenVINO](../integrations/openvino.md). The Coral Edge TPU is a great solution to this problem, since it can be used with a Raspberry Pi and accelerate inference performance greatly.
 
 ## Edge TPU on Raspberry Pi with TensorFlow Lite (New)⭐
 
@@ -81,7 +81,7 @@ After installing the runtime, you need to plug in your Coral Edge TPU into a USB
     sudo apt remove libedgetpu1-max
     ```
 
-## Export your model to a Edge TPU compatible model
+## Export to Edge TPU
 
 To use the Edge TPU, you need to convert your model into a compatible format. It is recommended that you run export on Google Colab, x86_64 Linux machine, using the official [Ultralytics Docker container](docker-quickstart.md), or using [Ultralytics HUB](../hub/quickstart.md), since the Edge TPU compiler is not available on ARM. See the [Export Mode](../modes/export.md) for the available arguments.
 
@@ -105,7 +105,7 @@ To use the Edge TPU, you need to convert your model into a compatible format. It
         yolo export model=path/to/model.pt format=edgetpu  # Export an official model or custom model
         ```
 
-The exported model will be saved in the `<model_name>_saved_model/` folder with the name `<model_name>_full_integer_quant_edgetpu.tflite`. It is important that your model ends with the suffix `_edgetpu.tflite`, otherwise ultralytics doesn't know that you're using a Edge TPU model.
+The exported model will be saved in the `<model_name>_saved_model/` folder with the name `<model_name>_full_integer_quant_edgetpu.tflite`. It is important that your model ends with the suffix `_edgetpu.tflite`, otherwise ultralytics doesn't know that you're using an Edge TPU model.
 
 ## Running the model
 
@@ -209,7 +209,7 @@ Yes, you can export your Ultralytics YOLO11 model to be compatible with the Cora
 
 For more information, refer to the [Export Mode](../modes/export.md) documentation.
 
-### What should I do if TensorFlow is already installed on my Raspberry Pi but I want to use tflite-runtime instead?
+### What should I do if TensorFlow is already installed on my Raspberry Pi, but I want to use tflite-runtime instead?
 
 If you have TensorFlow installed on your Raspberry Pi and need to switch to `tflite-runtime`, you'll need to uninstall TensorFlow first using:
 

@@ -138,9 +138,9 @@ class SegmentationValidator(DetectionValidator):
                 stat["tp_m"] = self._process_batch(
                     predn, bbox, cls, pred_masks, gt_masks, self.args.overlap_mask, masks=True
                 )
-                if self.args.plots:
-                    self.confusion_matrix.process_batch(predn, bbox, cls)
-                    self.output_bad_cases(predn, labelsn, batch, si)
+            if self.args.plots:
+                self.confusion_matrix.process_batch(predn, bbox, cls)
+                self.output_bad_cases(predn, labelsn, batch, si)
 
             for k in self.stats.keys():
                 self.stats[k].append(stat[k])
