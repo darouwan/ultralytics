@@ -69,7 +69,7 @@ class SegmentationValidator(DetectionValidator):
         self.plot_masks = []
         if self.args.save_json:
             check_requirements("pycocotools>=2.0.6")
-        # more accurate vs faster
+        # More accurate vs faster
         self.process = ops.process_mask_native if self.args.save_json or self.args.save_txt else ops.process_mask
         self.stats = dict(tp_m=[], tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
 
@@ -192,7 +192,7 @@ class SegmentationValidator(DetectionValidator):
             if self.args.plots and self.batch_i < 3:
                 self.plot_masks.append(pred_masks[:50].cpu())  # Limit plotted items for speed
                 if pred_masks.shape[0] > 50:
-                    LOGGER.warning("WARNING ⚠️ Limiting validation plots to first 50 items per image for speed...")
+                    LOGGER.warning("Limiting validation plots to first 50 items per image for speed...")
 
             # Save
             if self.args.save_json:
@@ -215,7 +215,16 @@ class SegmentationValidator(DetectionValidator):
                 )
 
     def finalize_metrics(self, *args, **kwargs):
-        """Set speed and confusion matrix for evaluation metrics."""
+        """
+        Finalize evaluation metrics by setting the speed attribute in the metrics object.
+
+        This method is called at the end of validation to set the processing speed for the metrics calculations.
+        It transfers the validator's speed measurement to the metrics object for reporting.
+
+        Args:
+            *args (Any): Variable length argument list.
+            **kwargs (Any): Arbitrary keyword arguments.
+        """
         self.metrics.speed = self.speed
         self.metrics.confusion_matrix = self.confusion_matrix
 
@@ -238,7 +247,7 @@ class SegmentationValidator(DetectionValidator):
         Returns:
             (torch.Tensor): A correct prediction matrix of shape (N, 10), where 10 represents different IoU levels.
 
-        Note:
+        Notes:
             - If `masks` is True, the function computes IoU between predicted and ground truth masks.
             - If `overlap` is True and `masks` is True, overlapping masks are taken into account when computing IoU.
 
