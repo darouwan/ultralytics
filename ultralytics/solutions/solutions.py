@@ -2,6 +2,7 @@
 
 import math
 from collections import defaultdict
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -69,7 +70,7 @@ class BaseSolution:
         >>> solution.display_output(image)
     """
 
-    def __init__(self, is_cli: bool = False, **kwargs):
+    def __init__(self, is_cli: bool = False, **kwargs: Any) -> None:
         """
         Initialize the BaseSolution class with configuration settings and YOLO model.
 
@@ -80,60 +81,59 @@ class BaseSolution:
         self.CFG = vars(SolutionConfig().update(**kwargs))
         self.LOGGER = LOGGER  # Store logger object to be used in multiple solution classes
 
-        if self.__class__.__name__ != "VisualAISearch":
-            check_requirements("shapely>=2.0.0")
-            from shapely.geometry import LineString, Point, Polygon
-            from shapely.prepared import prep
+        check_requirements("shapely>=2.0.0")
+        from shapely.geometry import LineString, Point, Polygon
+        from shapely.prepared import prep
 
-            self.LineString = LineString
-            self.Polygon = Polygon
-            self.Point = Point
-            self.prep = prep
-            self.annotator = None  # Initialize annotator
-            self.tracks = None
-            self.track_data = None
-            self.boxes = []
-            self.clss = []
-            self.track_ids = []
-            self.track_line = None
-            self.masks = None
-            self.r_s = None
-            self.frame_no = -1  # Only for logging
+        self.LineString = LineString
+        self.Polygon = Polygon
+        self.Point = Point
+        self.prep = prep
+        self.annotator = None  # Initialize annotator
+        self.tracks = None
+        self.track_data = None
+        self.boxes = []
+        self.clss = []
+        self.track_ids = []
+        self.track_line = None
+        self.masks = None
+        self.r_s = None
+        self.frame_no = -1  # Only for logging
 
-            self.LOGGER.info(f"Ultralytics Solutions: ✅ {self.CFG}")
-            self.region = self.CFG["region"]  # Store region data for other classes usage
-            self.line_width = self.CFG["line_width"]
+        self.LOGGER.info(f"Ultralytics Solutions: ✅ {self.CFG}")
+        self.region = self.CFG["region"]  # Store region data for other classes usage
+        self.line_width = self.CFG["line_width"]
 
-            # Load Model and store additional information (classes, show_conf, show_label)
-            if self.CFG["model"] is None:
-                self.CFG["model"] = "yolo11n.pt"
-            self.model = YOLO(self.CFG["model"])
-            self.names = self.model.names
-            self.classes = self.CFG["classes"]
-            self.show_conf = self.CFG["show_conf"]
-            self.show_labels = self.CFG["show_labels"]
-            self.device = self.CFG["device"]
+        # Load Model and store additional information (classes, show_conf, show_label)
+        if self.CFG["model"] is None:
+            self.CFG["model"] = "yolo11n.pt"
+        self.model = YOLO(self.CFG["model"])
+        self.names = self.model.names
+        self.classes = self.CFG["classes"]
+        self.show_conf = self.CFG["show_conf"]
+        self.show_labels = self.CFG["show_labels"]
+        self.device = self.CFG["device"]
 
-            self.track_add_args = {  # Tracker additional arguments for advance configuration
-                k: self.CFG[k] for k in ["iou", "conf", "device", "max_det", "half", "tracker"]
-            }  # verbose must be passed to track method; setting it False in YOLO still logs the track information.
+        self.track_add_args = {  # Tracker additional arguments for advance configuration
+            k: self.CFG[k] for k in {"iou", "conf", "device", "max_det", "half", "tracker"}
+        }  # verbose must be passed to track method; setting it False in YOLO still logs the track information.
 
-            if is_cli and self.CFG["source"] is None:
-                d_s = "solutions_ci_demo.mp4" if "-pose" not in self.CFG["model"] else "solution_ci_pose_demo.mp4"
-                self.LOGGER.warning(f"source not provided. using default source {ASSETS_URL}/{d_s}")
-                from ultralytics.utils.downloads import safe_download
+        if is_cli and self.CFG["source"] is None:
+            d_s = "solutions_ci_demo.mp4" if "-pose" not in self.CFG["model"] else "solution_ci_pose_demo.mp4"
+            self.LOGGER.warning(f"source not provided. using default source {ASSETS_URL}/{d_s}")
+            from ultralytics.utils.downloads import safe_download
 
-                safe_download(f"{ASSETS_URL}/{d_s}")  # download source from ultralytics assets
-                self.CFG["source"] = d_s  # set default source
+            safe_download(f"{ASSETS_URL}/{d_s}")  # download source from ultralytics assets
+            self.CFG["source"] = d_s  # set default source
 
-            # Initialize environment and region setup
-            self.env_check = check_imshow(warn=True)
-            self.track_history = defaultdict(list)
+        # Initialize environment and region setup
+        self.env_check = check_imshow(warn=True)
+        self.track_history = defaultdict(list)
 
-            self.profilers = (
-                ops.Profile(device=self.device),  # track
-                ops.Profile(device=self.device),  # solution
-            )
+        self.profilers = (
+            ops.Profile(device=self.device),  # track
+            ops.Profile(device=self.device),  # solution
+        )
 
     def adjust_box_label(self, cls: int, conf: float, track_id: Optional[int] = None) -> Optional[str]:
         """
@@ -154,7 +154,7 @@ class BaseSolution:
         name = ("" if track_id is None else f"{track_id} ") + self.names[cls]
         return (f"{name} {conf:.2f}" if self.show_conf else name) if self.show_labels else None
 
-    def extract_tracks(self, im0: np.ndarray):
+    def extract_tracks(self, im0: np.ndarray) -> None:
         """
         Apply object tracking and extract tracks from an input image or frame.
 
@@ -169,11 +169,12 @@ class BaseSolution:
         with self.profilers[0]:
             self.tracks = self.model.track(
                 source=im0, persist=True, classes=self.classes, verbose=False, **self.track_add_args
-            )
-        self.track_data = self.tracks[0].obb or self.tracks[0].boxes  # Extract tracks for OBB or object detection
+            )[0]
+        is_obb = self.tracks.obb is not None
+        self.track_data = self.tracks.obb if is_obb else self.tracks.boxes  # Extract tracks for OBB or object detection
 
-        if self.track_data and self.track_data.id is not None:
-            self.boxes = self.track_data.xyxy.cpu()
+        if self.track_data and self.track_data.is_track:
+            self.boxes = (self.track_data.xyxyxyxy if is_obb else self.track_data.xyxy).cpu()
             self.clss = self.track_data.cls.cpu().tolist()
             self.track_ids = self.track_data.id.int().cpu().tolist()
             self.confs = self.track_data.conf.cpu().tolist()
@@ -181,7 +182,7 @@ class BaseSolution:
             self.LOGGER.warning("no tracks found!")
             self.boxes, self.clss, self.track_ids, self.confs = [], [], [], []
 
-    def store_tracking_history(self, track_id: int, box):
+    def store_tracking_history(self, track_id: int, box) -> None:
         """
         Store the tracking history of an object.
 
@@ -202,7 +203,7 @@ class BaseSolution:
         if len(self.track_line) > 30:
             self.track_line.pop(0)
 
-    def initialize_region(self):
+    def initialize_region(self) -> None:
         """Initialize the counting region and line segment based on configuration settings."""
         if self.region is None:
             self.region = [(10, 200), (540, 200), (540, 180), (10, 180)]
@@ -210,7 +211,7 @@ class BaseSolution:
             self.Polygon(self.region) if len(self.region) >= 3 else self.LineString(self.region)
         )  # region or line
 
-    def display_output(self, plot_im: np.ndarray):
+    def display_output(self, plot_im: np.ndarray) -> None:
         """
         Display the results of the processing, which could involve showing frames, printing counts, or saving results.
 
@@ -236,10 +237,10 @@ class BaseSolution:
                 cv2.destroyAllWindows()  # Closes current frame window
                 return
 
-    def process(self, *args, **kwargs):
+    def process(self, *args: Any, **kwargs: Any):
         """Process method should be implemented by each Solution subclass."""
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any):
         """Allow instances to be called like a function with flexible arguments."""
         with self.profilers[1]:
             result = self.process(*args, **kwargs)  # Call the subclass-specific process method
@@ -422,6 +423,7 @@ class SolutionAnnotator(Annotator):
             text_y_offset = rect_y2
 
     @staticmethod
+    @lru_cache(maxsize=256)
     def estimate_pose_angle(a: List[float], b: List[float], c: List[float]) -> float:
         """
         Calculate the angle between three points for workout monitoring.
@@ -805,10 +807,10 @@ class SolutionResults:
         filled_slots (int): The number of filled slots in a monitored area.
         email_sent (bool): A flag indicating whether an email notification was sent.
         total_tracks (int): The total number of tracked objects.
-        region_counts (Dict): The count of objects within a specific region.
+        region_counts (Dict[str, int]): The count of objects within a specific region.
         speed_dict (Dict[str, float]): A dictionary containing speed information for tracked objects.
         total_crop_objects (int): Total number of cropped objects using ObjectCropper class.
-        speed (Dict): Performance timing information for tracking and solution processing.
+        speed (Dict[str, float]): Performance timing information for tracking and solution processing.
     """
 
     def __init__(self, **kwargs):

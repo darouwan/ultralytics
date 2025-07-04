@@ -25,7 +25,7 @@ import torch
 import tqdm
 
 from ultralytics import __version__
-from ultralytics.utils.patches import imread, imshow, imwrite, torch_load, torch_save  # for patches
+from ultralytics.utils.patches import imread, imshow, imwrite, torch_save  # for patches
 
 # PyTorch Multi-GPU DDP Constants
 RANK = int(os.getenv("RANK", -1))
@@ -205,7 +205,7 @@ class DataExportMixin:
         to_sql: Export results to an SQLite database.
 
     Examples:
-        >>> model = YOLO("yolov8n.pt")
+        >>> model = YOLO("yolo11n.pt")
         >>> results = model("image.jpg")
         >>> df = results.to_df()
         >>> print(df)
@@ -255,11 +255,8 @@ class DataExportMixin:
         Notes:
             Requires `lxml` package to be installed.
         """
-        from ultralytics.utils.checks import check_requirements
-
-        check_requirements("lxml")
         df = self.to_df(normalize=normalize, decimals=decimals)
-        return '<?xml version="1.0" encoding="utf-8"?>\n<root></root>' if df.empty else df.to_xml()
+        return '<?xml version="1.0" encoding="utf-8"?>\n<root></root>' if df.empty else df.to_xml(parser="etree")
 
     def to_html(self, normalize=False, decimals=5, index=False):
         """
@@ -841,8 +838,7 @@ def is_docker() -> bool:
         (bool): True if the script is running inside a Docker container, False otherwise.
     """
     try:
-        with open("/proc/self/cgroup") as f:
-            return "docker" in f.read()
+        return os.path.exists("/.dockerenv")
     except Exception:
         return False
 
@@ -1597,7 +1593,6 @@ TESTS_RUNNING = is_pytest_running() or is_github_action_running()
 set_sentry()
 
 # Apply monkey patches
-torch.load = torch_load
 torch.save = torch_save
 if WINDOWS:
     # Apply cv2 patches for non-ASCII and non-UTF characters in image paths

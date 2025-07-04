@@ -1,12 +1,4 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-"""
-YOLO-NAS model interface.
-
-Examples:
-    >>> from ultralytics import NAS
-    >>> model = NAS("yolo_nas_s")
-    >>> results = model.predict("ultralytics/assets/bus.jpg")
-"""
 
 from pathlib import Path
 from typing import Any, Dict
@@ -16,6 +8,7 @@ import torch
 from ultralytics.engine.model import Model
 from ultralytics.utils import DEFAULT_CFG_DICT
 from ultralytics.utils.downloads import attempt_download_asset
+from ultralytics.utils.patches import torch_load
 from ultralytics.utils.torch_utils import model_info
 
 from .predict import NASPredictor
@@ -64,7 +57,7 @@ class NAS(Model):
 
         suffix = Path(weights).suffix
         if suffix == ".pt":
-            self.model = torch.load(attempt_download_asset(weights))
+            self.model = torch_load(attempt_download_asset(weights))
         elif suffix == "":
             self.model = super_gradients.training.models.get(weights, pretrained_weights="coco")
 
