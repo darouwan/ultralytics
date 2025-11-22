@@ -9,9 +9,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import psutil
-import requests
-
 from ultralytics.utils import MACOS, RANK
 from ultralytics.utils.checks import check_requirements
 
@@ -22,11 +19,10 @@ if RANK in {-1, 0} and DEFAULT_LOG_PATH.exists():
 
 
 class ConsoleLogger:
-    """
-    Console output capture with API/file streaming and deduplication.
+    """Console output capture with API/file streaming and deduplication.
 
-    Captures stdout/stderr output and streams it to either an API endpoint or local file, with intelligent
-    deduplication to reduce noise from repetitive console output.
+    Captures stdout/stderr output and streams it to either an API endpoint or local file, with intelligent deduplication
+    to reduce noise from repetitive console output.
 
     Attributes:
         destination (str | Path): Target destination for streaming (URL or Path object).
@@ -56,8 +52,7 @@ class ConsoleLogger:
     """
 
     def __init__(self, destination):
-        """
-        Initialize with API endpoint or local file path.
+        """Initialize with API endpoint or local file path.
 
         Args:
             destination (str | Path): API endpoint URL (http/https) or local file path for streaming output.
@@ -77,7 +72,7 @@ class ConsoleLogger:
         # State tracking
         self.last_line = ""
         self.last_time = 0.0
-        self.last_progress_line = ""  # Track 100% progress lines separately
+        self.last_progress_line = ""  # Track last progress line for deduplication
         self.last_was_progress = False  # Track if last line was a progress bar
 
     def start_capture(self):
@@ -127,15 +122,14 @@ class ConsoleLogger:
         for line in lines:
             line = line.rstrip()
 
-            # Handle progress bars - only show 100% completions
-            if ("it/s" in line and ("%|" in line or "━" in line)) or (
-                "100%" in line and ("it/s" in line or "[" in line)
-            ):
-                if "100%" not in line:
-                    continue
-                # Dedupe 100% lines by core content (strip timing)
-                progress_core = line.split("[")[0].split("]")[0].strip()
-                if progress_core == self.last_progress_line:
+            # Skip lines with only thin progress bars (partial progress)
+            if "─" in line:  # Has thin lines but no thick lines
+                continue
+
+            # Deduplicate completed progress bars only if they match the previous progress line
+            if " ━━" in line:
+                progress_core = line.split(" ━━")[0].strip()
+                if progress_core == self.last_progress_line and self.last_was_progress:
                     continue
                 self.last_progress_line = progress_core
                 self.last_was_progress = True
@@ -190,8 +184,10 @@ class ConsoleLogger:
         """Write log to API endpoint or local file destination."""
         try:
             if self.is_api:
+                import requests  # scoped as slow import
+
                 payload = {"timestamp": datetime.now().isoformat(), "message": text.strip()}
-                requests.post(self.destination, json=payload, timeout=5)
+                requests.post(str(self.destination), json=payload, timeout=5)
             else:
                 self.destination.parent.mkdir(parents=True, exist_ok=True)
                 with self.destination.open("a", encoding="utf-8") as f:
@@ -202,17 +198,20 @@ class ConsoleLogger:
     class _ConsoleCapture:
         """Lightweight stdout/stderr capture."""
 
-        __slots__ = ("original", "callback")
+        __slots__ = ("callback", "original")
 
         def __init__(self, original, callback):
+            """Initialize a stream wrapper that redirects writes to a callback while preserving the original."""
             self.original = original
             self.callback = callback
 
         def write(self, text):
+            """Forward text to the wrapped original stream, preserving default stdout/stderr semantics."""
             self.original.write(text)
             self.callback(text)
 
         def flush(self):
+            """Flush the wrapped stream to propagate buffered output promptly during console capture."""
             self.original.flush()
 
     class _LogHandler(logging.Handler):
@@ -221,24 +220,24 @@ class ConsoleLogger:
         __slots__ = ("callback",)
 
         def __init__(self, callback):
+            """Initialize a lightweight logging.Handler that forwards log records to the provided callback."""
             super().__init__()
             self.callback = callback
 
         def emit(self, record):
+            """Format and forward LogRecord messages to the capture callback for unified log streaming."""
             self.callback(self.format(record) + "\n")
 
 
 class SystemLogger:
-    """
-    Log dynamic system metrics for training monitoring.
+    """Log dynamic system metrics for training monitoring.
 
-    Captures real-time system metrics including CPU, RAM, disk I/O, network I/O, and NVIDIA GPU statistics for
-    training performance monitoring and analysis.
+    Captures real-time system metrics including CPU, RAM, disk I/O, network I/O, and NVIDIA GPU statistics for training
+    performance monitoring and analysis.
 
     Attributes:
         pynvml: NVIDIA pynvml module instance if successfully imported, None otherwise.
         nvidia_initialized (bool): Whether NVIDIA GPU monitoring is available and initialized.
-        process (psutil.Process): Current psutil.Process instance for process-specific metrics.
         net_start: Initial network I/O counters for calculating cumulative usage.
         disk_start: Initial disk I/O counters for calculating cumulative usage.
 
@@ -261,9 +260,10 @@ class SystemLogger:
 
     def __init__(self):
         """Initialize the system logger."""
+        import psutil  # scoped as slow import
+
         self.pynvml = None
         self.nvidia_initialized = self._init_nvidia()
-        self.process = psutil.Process()
         self.net_start = psutil.net_io_counters()
         self.disk_start = psutil.disk_io_counters()
 
@@ -271,7 +271,7 @@ class SystemLogger:
         """Initialize NVIDIA GPU monitoring with pynvml."""
         try:
             assert not MACOS
-            check_requirements("pynvml>=12.0.0")
+            check_requirements("nvidia-ml-py>=12.0.0")
             self.pynvml = __import__("pynvml")
             self.pynvml.nvmlInit()
             return True
@@ -279,22 +279,21 @@ class SystemLogger:
             return False
 
     def get_metrics(self):
-        """
-        Get current system metrics.
+        """Get current system metrics.
 
-        Collects comprehensive system metrics including CPU usage, RAM usage, disk I/O statistics,
-        network I/O statistics, and GPU metrics (if available). Example output:
+        Collects comprehensive system metrics including CPU usage, RAM usage, disk I/O statistics, network I/O
+        statistics, and GPU metrics (if available). Example output:
 
-        ```json
-        {
-            'cpu': 45.2,
-            'ram': 78.9,
-            'disk': {'read_mb': 156.7, 'write_mb': 89.3, 'used_gb': 256.8},
-            'network': {'recv_mb': 157.2, 'sent_mb': 89.1},
-            'gpus': {
-                0: {'usage': 95.6, 'memory': 85.4, 'temp': 72, 'power': 285},
-                1: {'usage': 94.1, 'memory': 82.7, 'temp': 70, 'power': 278}
-            }
+        ```python
+        metrics = {
+            "cpu": 45.2,
+            "ram": 78.9,
+            "disk": {"read_mb": 156.7, "write_mb": 89.3, "used_gb": 256.8},
+            "network": {"recv_mb": 157.2, "sent_mb": 89.1},
+            "gpus": {
+                0: {"usage": 95.6, "memory": 85.4, "temp": 72, "power": 285},
+                1: {"usage": 94.1, "memory": 82.7, "temp": 70, "power": 278},
+            },
         }
         ```
 
@@ -314,8 +313,10 @@ class SystemLogger:
             - power (int): GPU power consumption in watts
 
         Returns:
-            (dict): System metrics containing 'cpu', 'ram', 'disk', 'network', 'gpus' with respective usage data.
+            metrics (dict): System metrics containing 'cpu', 'ram', 'disk', 'network', 'gpus' with usage data.
         """
+        import psutil  # scoped as slow import
+
         net = psutil.net_io_counters()
         disk = psutil.disk_io_counters()
         memory = psutil.virtual_memory()
