@@ -1,5 +1,7 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
+from __future__ import annotations
+
 import contextlib
 import importlib.metadata
 import inspect
@@ -8,14 +10,15 @@ import logging
 import os
 import platform
 import re
-import subprocess
+import socket
 import sys
 import threading
 import time
+import warnings
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
-from typing import Union
 from urllib.parse import unquote
 
 import cv2
@@ -23,6 +26,7 @@ import numpy as np
 import torch
 
 from ultralytics import __version__
+from ultralytics.utils.git import GitRepo
 from ultralytics.utils.patches import imread, imshow, imwrite, torch_save  # for patches
 from ultralytics.utils.tqdm import TQDM  # noqa
 
@@ -43,9 +47,10 @@ VERBOSE = str(os.getenv("YOLO_VERBOSE", True)).lower() == "true"  # global verbo
 LOGGING_NAME = "ultralytics"
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])  # environment booleans
 MACOS_VERSION = platform.mac_ver()[0] if MACOS else None
+NOT_MACOS14 = not (MACOS and MACOS_VERSION.startswith("14."))
 ARM64 = platform.machine() in {"arm64", "aarch64"}  # ARM64 booleans
 PYTHON_VERSION = platform.python_version()
-TORCH_VERSION = torch.__version__
+TORCH_VERSION = str(torch.__version__)  # Normalize torch.__version__ (PyTorch>1.9 returns TorchVersion objects)
 TORCHVISION_VERSION = importlib.metadata.version("torchvision")  # faster than importing torchvision
 IS_VSCODE = os.environ.get("TERM_PROGRAM", False) == "vscode"
 RKNN_CHIPS = frozenset(
@@ -60,6 +65,7 @@ RKNN_CHIPS = frozenset(
         "rv1103b",
         "rv1106b",
         "rk2118",
+        "rv1126b",
     }
 )  # Rockchip processors available for export
 HELP_MSG = """
@@ -74,8 +80,8 @@ HELP_MSG = """
         from ultralytics import YOLO
 
         # Load a model
-        model = YOLO("yolo11n.yaml")  # build a new model from scratch
-        model = YOLO("yolo11n.pt")  # load a pretrained model (recommended for training)
+        model = YOLO("yolo26n.yaml")  # build a new model from scratch
+        model = YOLO("yolo26n.pt")  # load a pretrained model (recommended for training)
 
         # Use the model
         results = model.train(data="coco8.yaml", epochs=3)  # train the model
@@ -95,16 +101,16 @@ HELP_MSG = """
                         See all ARGS at https://docs.ultralytics.com/usage/cfg or with "yolo cfg"
 
         - Train a detection model for 10 epochs with an initial learning_rate of 0.01
-            yolo detect train data=coco8.yaml model=yolo11n.pt epochs=10 lr0=0.01
+            yolo detect train data=coco8.yaml model=yolo26n.pt epochs=10 lr0=0.01
 
         - Predict a YouTube video using a pretrained segmentation model at image size 320:
-            yolo segment predict model=yolo11n-seg.pt source='https://youtu.be/LNwODJXcvt4' imgsz=320
+            yolo segment predict model=yolo26n-seg.pt source='https://youtu.be/LNwODJXcvt4' imgsz=320
 
         - Val a pretrained detection model at batch-size 1 and image size 640:
-            yolo detect val model=yolo11n.pt data=coco8.yaml batch=1 imgsz=640
+            yolo detect val model=yolo26n.pt data=coco8.yaml batch=1 imgsz=640
 
-        - Export a YOLO11n classification model to ONNX format at image size 224 by 128 (no TASK required)
-            yolo export model=yolo11n-cls.pt format=onnx imgsz=224,128
+        - Export a YOLO26n classification model to ONNX format at image size 224 by 128 (no TASK required)
+            yolo export model=yolo26n-cls.pt format=onnx imgsz=224,128
 
         - Run special commands:
             yolo help
@@ -128,14 +134,25 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # suppress verbose TF compiler warning
 os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"  # suppress "NNPACK.cpp could not initialize NNPACK" warnings
 os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output when computing FLOPs
 
+# Centralized warning suppression
+warnings.filterwarnings("ignore", message="torch.distributed.reduce_op is deprecated")  # PyTorch deprecation
+warnings.filterwarnings("ignore", message="The figure layout has changed to tight")  # matplotlib>=3.7.2
+warnings.filterwarnings("ignore", category=FutureWarning, module="timm")  # mobileclip timm.layers deprecation
+warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)  # ONNX/TorchScript export tracer warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*prim::Constant.*")  # ONNX shape warning
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="coremltools")  # CoreML np.bool deprecation
+
+# Precompiled type tuples for faster isinstance() checks
+FLOAT_OR_INT = (float, int)
+STR_OR_PATH = (str, Path)
+
 
 class DataExportMixin:
-    """
-    Mixin class for exporting validation metrics or prediction results in various formats.
+    """Mixin class for exporting validation metrics or prediction results in various formats.
 
     This class provides utilities to export performance metrics (e.g., mAP, precision, recall) or prediction results
     from classification, object detection, segmentation, or pose estimation tasks into various formats: Polars
-    DataFrame, CSV and JSON.
+    DataFrame, CSV, and JSON.
 
     Methods:
         to_df: Convert summary to a Polars DataFrame.
@@ -144,7 +161,7 @@ class DataExportMixin:
         tojson: Deprecated alias for `to_json()`.
 
     Examples:
-        >>> model = YOLO("yolo11n.pt")
+        >>> model = YOLO("yolo26n.pt")
         >>> results = model("image.jpg")
         >>> df = results.to_df()
         >>> print(df)
@@ -152,30 +169,28 @@ class DataExportMixin:
     """
 
     def to_df(self, normalize=False, decimals=5):
-        """
-        Create a polars DataFrame from the prediction results summary or validation metrics.
+        """Create a Polars DataFrame from the prediction results summary or validation metrics.
 
         Args:
             normalize (bool, optional): Normalize numerical values for easier comparison.
             decimals (int, optional): Decimal places to round floats.
 
         Returns:
-            (DataFrame): DataFrame containing the summary data.
+            (polars.DataFrame): Polars DataFrame containing the summary data.
         """
         import polars as pl  # scope for faster 'import ultralytics'
 
         return pl.DataFrame(self.summary(normalize=normalize, decimals=decimals))
 
     def to_csv(self, normalize=False, decimals=5):
-        """
-        Export results or metrics to CSV string format.
+        """Export results or metrics to CSV string format.
 
         Args:
-           normalize (bool, optional): Normalize numeric values.
-           decimals (int, optional): Decimal precision.
+            normalize (bool, optional): Normalize numeric values.
+            decimals (int, optional): Decimal precision.
 
         Returns:
-           (str): CSV content as string.
+            (str): CSV content as string.
         """
         import polars as pl
 
@@ -188,9 +203,10 @@ class DataExportMixin:
             def _to_str_simple(v):
                 if v is None:
                     return ""
-                if isinstance(v, (dict, list, tuple, set)):
+                elif isinstance(v, (dict, list, tuple, set)):
                     return repr(v)
-                return str(v)
+                else:
+                    return str(v)
 
             df_str = df.select(
                 [pl.col(c).map_elements(_to_str_simple, return_dtype=pl.String).alias(c) for c in df.columns]
@@ -198,8 +214,7 @@ class DataExportMixin:
             return df_str.write_csv()
 
     def to_json(self, normalize=False, decimals=5):
-        """
-        Export results to JSON format.
+        """Export results to JSON format.
 
         Args:
             normalize (bool, optional): Normalize numeric values.
@@ -212,11 +227,10 @@ class DataExportMixin:
 
 
 class SimpleClass:
-    """
-    A simple base class for creating objects with string representations of their attributes.
+    """A simple base class for creating objects with string representations of their attributes.
 
-    This class provides a foundation for creating objects that can be easily printed or represented as strings,
-    showing all their non-callable attributes. It's useful for debugging and introspection of object states.
+    This class provides a foundation for creating objects that can be easily printed or represented as strings, showing
+    all their non-callable attributes. It's useful for debugging and introspection of object states.
 
     Methods:
         __str__: Return a human-readable string representation of the object.
@@ -251,7 +265,7 @@ class SimpleClass:
                     # Display only the module and class name for subclasses
                     s = f"{a}: {v.__module__}.{v.__class__.__name__} object"
                 else:
-                    s = f"{a}: {repr(v)}"
+                    s = f"{a}: {v!r}"
                 attr.append(s)
         return f"{self.__module__}.{self.__class__.__name__} object with attributes:\n\n" + "\n".join(attr)
 
@@ -266,12 +280,11 @@ class SimpleClass:
 
 
 class IterableSimpleNamespace(SimpleNamespace):
-    """
-    An iterable SimpleNamespace class that provides enhanced functionality for attribute access and iteration.
+    """An iterable SimpleNamespace class that provides enhanced functionality for attribute access and iteration.
 
-    This class extends the SimpleNamespace class with additional methods for iteration, string representation,
-    and attribute access. It is designed to be used as a convenient container for storing and accessing
-    configuration parameters.
+    This class extends the SimpleNamespace class with additional methods for iteration, string representation, and
+    attribute access. It is designed to be used as a convenient container for storing and accessing configuration
+    parameters.
 
     Methods:
         __iter__: Return an iterator of key-value pairs from the namespace's attributes.
@@ -326,8 +339,7 @@ class IterableSimpleNamespace(SimpleNamespace):
 
 
 def plt_settings(rcparams=None, backend="Agg"):
-    """
-    Decorator to temporarily set rc parameters and the backend for a plotting function.
+    """Decorator to temporarily set rc parameters and the backend for a plotting function.
 
     Args:
         rcparams (dict, optional): Dictionary of rc parameters to set.
@@ -380,12 +392,11 @@ def plt_settings(rcparams=None, backend="Agg"):
 
 
 def set_logging(name="LOGGING_NAME", verbose=True):
-    """
-    Set up logging with UTF-8 encoding and configurable verbosity.
+    """Set up logging with UTF-8 encoding and configurable verbosity.
 
-    This function configures logging for the Ultralytics library, setting the appropriate logging level and
-    formatter based on the verbosity flag and the current process rank. It handles special cases for Windows
-    environments where UTF-8 encoding might not be the default.
+    This function configures logging for the Ultralytics library, setting the appropriate logging level and formatter
+    based on the verbosity flag and the current process rank. It handles special cases for Windows environments where
+    UTF-8 encoding might not be the default.
 
     Args:
         name (str): Name of the logger.
@@ -412,10 +423,10 @@ def set_logging(name="LOGGING_NAME", verbose=True):
             """Format log records with prefixes based on level."""
             # Apply prefixes based on log level
             if record.levelno == logging.WARNING:
-                prefix = "WARNING ⚠️" if not WINDOWS else "WARNING"
+                prefix = "WARNING" if WINDOWS else "WARNING ⚠️"
                 record.msg = f"{prefix} {record.msg}"
             elif record.levelno == logging.ERROR:
-                prefix = "ERROR ❌" if not WINDOWS else "ERROR"
+                prefix = "ERROR" if WINDOWS else "ERROR ❌"
                 record.msg = f"{prefix} {record.msg}"
 
             # Handle emojis in message based on platform
@@ -426,7 +437,7 @@ def set_logging(name="LOGGING_NAME", verbose=True):
 
     # Handle Windows UTF-8 encoding issues
     if WINDOWS and hasattr(sys.stdout, "encoding") and sys.stdout.encoding != "utf-8":
-        try:
+        with contextlib.suppress(Exception):
             # Attempt to reconfigure stdout to use UTF-8 encoding if possible
             if hasattr(sys.stdout, "reconfigure"):
                 sys.stdout.reconfigure(encoding="utf-8")
@@ -435,8 +446,6 @@ def set_logging(name="LOGGING_NAME", verbose=True):
                 import io
 
                 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-        except Exception:
-            pass
 
     # Create and configure the StreamHandler with the appropriate formatter and level
     stream_handler = logging.StreamHandler(sys.stdout)
@@ -453,8 +462,7 @@ def set_logging(name="LOGGING_NAME", verbose=True):
 
 # Set logger
 LOGGER = set_logging(LOGGING_NAME, verbose=VERBOSE)  # define globally (used in train.py, val.py, predict.py, etc.)
-for logger in "sentry_sdk", "urllib3.connectionpool":
-    logging.getLogger(logger).setLevel(logging.CRITICAL + 1)
+logging.getLogger("sentry_sdk").setLevel(logging.CRITICAL + 1)
 
 
 def emojis(string=""):
@@ -463,8 +471,7 @@ def emojis(string=""):
 
 
 class ThreadingLocked:
-    """
-    A decorator class for ensuring thread-safe execution of a function or method.
+    """A decorator class for ensuring thread-safe execution of a function or method.
 
     This class can be used as a decorator to make sure that if the decorated function is called from multiple threads,
     only one thread at a time will be able to execute the function.
@@ -497,8 +504,7 @@ class ThreadingLocked:
 
 
 class YAML:
-    """
-    YAML utility class for efficient file operations with automatic C-implementation detection.
+    """YAML utility class for efficient file operations with automatic C-implementation detection.
 
     This class provides optimized YAML loading and saving operations using PyYAML's fastest available implementation
     (C-based when possible). It implements a singleton pattern with lazy initialization, allowing direct class method
@@ -548,8 +554,7 @@ class YAML:
 
     @classmethod
     def save(cls, file="data.yaml", data=None, header=""):
-        """
-        Save Python object as YAML file.
+        """Save Python object as YAML file.
 
         Args:
             file (str | Path): Path to save YAML file.
@@ -578,8 +583,7 @@ class YAML:
 
     @classmethod
     def load(cls, file="data.yaml", append_filename=False):
-        """
-        Load YAML file to Python object with robust error handling.
+        """Load YAML file to Python object with robust error handling.
 
         Args:
             file (str | Path): Path to YAML file.
@@ -613,8 +617,7 @@ class YAML:
 
     @classmethod
     def print(cls, yaml_file):
-        """
-        Pretty print YAML file or object to console.
+        """Pretty print YAML file or object to console.
 
         Args:
             yaml_file (str | Path | dict): Path to YAML file or dict to print.
@@ -637,8 +640,7 @@ DEFAULT_CFG = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
 
 
 def read_device_model() -> str:
-    """
-    Read the device model information from the system and cache it for quick access.
+    """Read the device model information from the system and cache it for quick access.
 
     Returns:
         (str): Kernel release information.
@@ -647,8 +649,7 @@ def read_device_model() -> str:
 
 
 def is_ubuntu() -> bool:
-    """
-    Check if the OS is Ubuntu.
+    """Check if the OS is Ubuntu.
 
     Returns:
         (bool): True if OS is Ubuntu, False otherwise.
@@ -660,9 +661,34 @@ def is_ubuntu() -> bool:
         return False
 
 
-def is_colab():
+def is_debian(codenames: list[str] | None | str = None) -> list[bool] | bool:
+    """Check if the OS is Debian.
+
+    Args:
+        codenames (list[str] | None | str): Specific Debian codename to check for (e.g., 'buster', 'bullseye'). If None,
+            only checks for Debian.
+
+    Returns:
+        (list[bool] | bool): List of booleans indicating if OS matches each Debian codename, or a single boolean if no
+            codenames provided.
     """
-    Check if the current script is running inside a Google Colab notebook.
+    try:
+        with open("/etc/os-release") as f:
+            content = f.read()
+            if codenames is None:
+                return "ID=debian" in content
+            if isinstance(codenames, str):
+                codenames = [codenames]
+            return [
+                f"VERSION_CODENAME={codename}" in content if codename else "ID=debian" in content
+                for codename in codenames
+            ]
+    except FileNotFoundError:
+        return [False] * len(codenames) if codenames else False
+
+
+def is_colab():
+    """Check if the current script is running inside a Google Colab notebook.
 
     Returns:
         (bool): True if running inside a Colab notebook, False otherwise.
@@ -671,8 +697,7 @@ def is_colab():
 
 
 def is_kaggle():
-    """
-    Check if the current script is running inside a Kaggle kernel.
+    """Check if the current script is running inside a Kaggle kernel.
 
     Returns:
         (bool): True if running inside a Kaggle kernel, False otherwise.
@@ -681,8 +706,7 @@ def is_kaggle():
 
 
 def is_jupyter():
-    """
-    Check if the current script is running inside a Jupyter Notebook.
+    """Check if the current script is running inside a Jupyter Notebook.
 
     Returns:
         (bool): True if running inside a Jupyter Notebook, False otherwise.
@@ -695,8 +719,7 @@ def is_jupyter():
 
 
 def is_runpod():
-    """
-    Check if the current script is running inside a RunPod container.
+    """Check if the current script is running inside a RunPod container.
 
     Returns:
         (bool): True if running in RunPod, False otherwise.
@@ -705,8 +728,7 @@ def is_runpod():
 
 
 def is_docker() -> bool:
-    """
-    Determine if the script is running inside a Docker container.
+    """Determine if the script is running inside a Docker container.
 
     Returns:
         (bool): True if the script is running inside a Docker container, False otherwise.
@@ -718,8 +740,7 @@ def is_docker() -> bool:
 
 
 def is_raspberrypi() -> bool:
-    """
-    Determine if the Python environment is running on a Raspberry Pi.
+    """Determine if the Python environment is running on a Raspberry Pi.
 
     Returns:
         (bool): True if running on a Raspberry Pi, False otherwise.
@@ -727,37 +748,60 @@ def is_raspberrypi() -> bool:
     return "rpi" in DEVICE_MODEL
 
 
-def is_jetson() -> bool:
-    """
-    Determine if the Python environment is running on an NVIDIA Jetson device.
+@lru_cache(maxsize=3)
+def is_jetson(jetpack=None) -> bool:
+    """Determine if the Python environment is running on an NVIDIA Jetson device.
+
+    Args:
+        jetpack (int | None): If specified, check for specific JetPack version (4, 5, 6).
 
     Returns:
         (bool): True if running on an NVIDIA Jetson device, False otherwise.
     """
-    return "tegra" in DEVICE_MODEL
+    jetson = "tegra" in DEVICE_MODEL
+    if jetson and jetpack:
+        try:
+            content = open("/etc/nv_tegra_release").read()
+            version_map = {4: "R32", 5: "R35", 6: "R36", 7: "R38"}  # JetPack to L4T major version mapping
+            return jetpack in version_map and version_map[jetpack] in content
+        except Exception:
+            return False
+    return jetson
+
+
+def is_dgx() -> bool:
+    """Check if the current script is running inside a DGX (NVIDIA Data Center GPU), DGX-Ready or DGX Spark system.
+
+    Returns:
+        (bool): True if running in a DGX or DGX-Ready or DGX Spark system, False otherwise.
+    """
+    try:
+        with open("/etc/dgx-release") as f:
+            return "DGX" in f.read()
+    except FileNotFoundError:
+        return False
 
 
 def is_online() -> bool:
-    """
-    Check internet connectivity by attempting to connect to a known online host.
+    """Fast online check using DNS (v4/v6) resolution (Cloudflare + Google).
 
     Returns:
         (bool): True if connection is successful, False otherwise.
     """
-    try:
-        assert str(os.getenv("YOLO_OFFLINE", "")).lower() != "true"  # check if ENV var YOLO_OFFLINE="True"
-        import socket
-
-        for dns in ("1.1.1.1", "8.8.8.8"):  # check Cloudflare and Google DNS
-            socket.create_connection(address=(dns, 80), timeout=2.0).close()
-            return True
-    except Exception:
+    if str(os.getenv("YOLO_OFFLINE", "")).lower() == "true":
         return False
+
+    for host in ("one.one.one.one", "dns.google"):
+        try:
+            socket.getaddrinfo(host, 0, socket.AF_UNSPEC, 0, 0, socket.AI_ADDRCONFIG)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def is_pip_package(filepath: str = __name__) -> bool:
-    """
-    Determine if the file at the given filepath is part of a pip package.
+    """Determine if the file at the given filepath is part of a pip package.
 
     Args:
         filepath (str): The filepath to check.
@@ -774,22 +818,20 @@ def is_pip_package(filepath: str = __name__) -> bool:
     return spec is not None and spec.origin is not None
 
 
-def is_dir_writeable(dir_path: Union[str, Path]) -> bool:
-    """
-    Check if a directory is writeable.
+def is_dir_writeable(dir_path: str | Path) -> bool:
+    """Check if a directory is writable.
 
     Args:
         dir_path (str | Path): The path to the directory.
 
     Returns:
-        (bool): True if the directory is writeable, False otherwise.
+        (bool): True if the directory is writable, False otherwise.
     """
     return os.access(str(dir_path), os.W_OK)
 
 
 def is_pytest_running():
-    """
-    Determine whether pytest is currently running or not.
+    """Determine whether pytest is currently running or not.
 
     Returns:
         (bool): True if pytest is running, False otherwise.
@@ -798,8 +840,7 @@ def is_pytest_running():
 
 
 def is_github_action_running() -> bool:
-    """
-    Determine if the current environment is a GitHub Actions runner.
+    """Determine if the current environment is a GitHub Actions runner.
 
     Returns:
         (bool): True if the current environment is a GitHub Actions runner, False otherwise.
@@ -807,61 +848,8 @@ def is_github_action_running() -> bool:
     return "GITHUB_ACTIONS" in os.environ and "GITHUB_WORKFLOW" in os.environ and "RUNNER_OS" in os.environ
 
 
-def get_git_dir():
-    """
-    Determine whether the current file is part of a git repository and if so, return the repository root directory.
-
-    Returns:
-        (Path | None): Git root directory if found or None if not found.
-    """
-    for d in Path(__file__).parents:
-        if (d / ".git").is_dir():
-            return d
-
-
-def is_git_dir():
-    """
-    Determine whether the current file is part of a git repository.
-
-    Returns:
-        (bool): True if current file is part of a git repository.
-    """
-    return GIT_DIR is not None
-
-
-def get_git_origin_url():
-    """
-    Retrieve the origin URL of a git repository.
-
-    Returns:
-        (str | None): The origin URL of the git repository or None if not git directory.
-    """
-    if IS_GIT_DIR:
-        try:
-            origin = subprocess.check_output(["git", "config", "--get", "remote.origin.url"])
-            return origin.decode().strip()
-        except subprocess.CalledProcessError:
-            return None
-
-
-def get_git_branch():
-    """
-    Return the current git branch name. If not in a git repository, return None.
-
-    Returns:
-        (str | None): The current git branch name or None if not a git directory.
-    """
-    if IS_GIT_DIR:
-        try:
-            origin = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-            return origin.decode().strip()
-        except subprocess.CalledProcessError:
-            return None
-
-
 def get_default_args(func):
-    """
-    Return a dictionary of default arguments for a function.
+    """Return a dictionary of default arguments for a function.
 
     Args:
         func (callable): The function to inspect.
@@ -874,8 +862,7 @@ def get_default_args(func):
 
 
 def get_ubuntu_version():
-    """
-    Retrieve the Ubuntu version if the OS is Ubuntu.
+    """Retrieve the Ubuntu version if the OS is Ubuntu.
 
     Returns:
         (str): Ubuntu version or None if not an Ubuntu OS.
@@ -889,8 +876,7 @@ def get_ubuntu_version():
 
 
 def get_user_config_dir(sub_dir="Ultralytics"):
-    """
-    Return the appropriate config directory based on the environment operating system.
+    """Return a writable config dir, preferring YOLO_CONFIG_DIR and being OS-aware.
 
     Args:
         sub_dir (str): The name of the subdirectory to create.
@@ -898,27 +884,38 @@ def get_user_config_dir(sub_dir="Ultralytics"):
     Returns:
         (Path): The path to the user config directory.
     """
-    if WINDOWS:
-        path = Path.home() / "AppData" / "Roaming" / sub_dir
-    elif MACOS:  # macOS
-        path = Path.home() / "Library" / "Application Support" / sub_dir
+    if env_dir := os.getenv("YOLO_CONFIG_DIR"):
+        p = Path(env_dir).expanduser() / sub_dir
     elif LINUX:
-        path = Path.home() / ".config" / sub_dir
+        p = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / sub_dir
+    elif WINDOWS:
+        p = Path.home() / "AppData" / "Roaming" / sub_dir
+    elif MACOS:
+        p = Path.home() / "Library" / "Application Support" / sub_dir
     else:
         raise ValueError(f"Unsupported operating system: {platform.system()}")
 
-    # GCP and AWS lambda fix, only /tmp is writeable
-    if not is_dir_writeable(path.parent):
-        LOGGER.warning(
-            f"user config directory '{path}' is not writeable, defaulting to '/tmp' or CWD. "
-            "Alternatively you can define a YOLO_CONFIG_DIR environment variable for this path."
-        )
-        path = Path("/tmp") / sub_dir if is_dir_writeable("/tmp") else Path().cwd() / sub_dir
+    if p.exists():  # already created → trust it
+        return p
+    if is_dir_writeable(p.parent):  # create if possible
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
-    # Create the subdirectory if it does not exist
-    path.mkdir(parents=True, exist_ok=True)
+    # Fallbacks for Docker, GCP/AWS functions where only /tmp is writable
+    for alt in [Path("/tmp") / sub_dir, Path.cwd() / sub_dir]:
+        if alt.exists():
+            return alt
+        if is_dir_writeable(alt.parent):
+            alt.mkdir(parents=True, exist_ok=True)
+            LOGGER.warning(
+                f"user config directory '{p}' is not writable, using '{alt}'. Set YOLO_CONFIG_DIR to override."
+            )
+            return alt
 
-    return path
+    # Last fallback → CWD
+    p = Path.cwd() / sub_dir
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 # Define constants (required below)
@@ -931,15 +928,15 @@ IS_JETSON = is_jetson()
 IS_JUPYTER = is_jupyter()
 IS_PIP_PACKAGE = is_pip_package()
 IS_RASPBERRYPI = is_raspberrypi()
-GIT_DIR = get_git_dir()
-IS_GIT_DIR = is_git_dir()
-USER_CONFIG_DIR = Path(os.getenv("YOLO_CONFIG_DIR") or get_user_config_dir())  # Ultralytics settings dir
+IS_DEBIAN, IS_DEBIAN_BOOKWORM, IS_DEBIAN_TRIXIE = is_debian([None, "bookworm", "trixie"])
+IS_UBUNTU = is_ubuntu()
+GIT = GitRepo()
+USER_CONFIG_DIR = get_user_config_dir()  # Ultralytics settings dir
 SETTINGS_FILE = USER_CONFIG_DIR / "settings.json"
 
 
 def colorstr(*input):
-    r"""
-    Color a string based on the provided color and style arguments using ANSI escape codes.
+    r"""Color a string based on the provided color and style arguments using ANSI escape codes.
 
     This function can be called in two ways:
         - colorstr('color', 'style', 'your string')
@@ -948,11 +945,15 @@ def colorstr(*input):
     In the second form, 'blue' and 'bold' will be applied by default.
 
     Args:
-        *input (str | Path): A sequence of strings where the first n-1 strings are color and style arguments,
-                      and the last string is the one to be colored.
+        *input (str | Path): A sequence of strings where the first n-1 strings are color and style arguments, and the
+            last string is the one to be colored.
 
     Returns:
         (str): The input string wrapped with ANSI escape codes for the specified color and style.
+
+    Examples:
+        >>> colorstr("blue", "bold", "hello world")
+        >>> "\033[34m\033[1mhello world\033[0m"
 
     Notes:
         Supported Colors and Styles:
@@ -960,10 +961,6 @@ def colorstr(*input):
         - Bright Colors: 'bright_black', 'bright_red', 'bright_green', 'bright_yellow',
                        'bright_blue', 'bright_magenta', 'bright_cyan', 'bright_white'
         - Misc: 'end', 'bold', 'underline'
-
-    Examples:
-        >>> colorstr("blue", "bold", "hello world")
-        >>> "\033[34m\033[1mhello world\033[0m"
 
     References:
         https://en.wikipedia.org/wiki/ANSI_escape_code
@@ -994,8 +991,7 @@ def colorstr(*input):
 
 
 def remove_colorstr(input_string):
-    """
-    Remove ANSI escape codes from a string, effectively un-coloring it.
+    """Remove ANSI escape codes from a string, effectively un-coloring it.
 
     Args:
         input_string (str): The string to remove color and style from.
@@ -1012,8 +1008,7 @@ def remove_colorstr(input_string):
 
 
 class TryExcept(contextlib.ContextDecorator):
-    """
-    Ultralytics TryExcept class for handling exceptions gracefully.
+    """Ultralytics TryExcept class for handling exceptions gracefully.
 
     This class can be used as a decorator or context manager to catch exceptions and optionally print warning messages.
     It allows code to continue execution even when exceptions occur, which is useful for non-critical operations.
@@ -1052,12 +1047,11 @@ class TryExcept(contextlib.ContextDecorator):
 
 
 class Retry(contextlib.ContextDecorator):
-    """
-    Retry class for function execution with exponential backoff.
+    """Retry class for function execution with exponential backoff.
 
     This decorator can be used to retry a function on exceptions, up to a specified number of times with an
-    exponentially increasing delay between retries. It's useful for handling transient failures in network
-    operations or other unreliable processes.
+    exponentially increasing delay between retries. It's useful for handling transient failures in network operations or
+    other unreliable processes.
 
     Attributes:
         times (int): Maximum number of retry attempts.
@@ -1097,12 +1091,11 @@ class Retry(contextlib.ContextDecorator):
 
 
 def threaded(func):
-    """
-    Multi-thread a target function by default and return the thread or function result.
+    """Multi-thread a target function by default and return the thread or function result.
 
-    This decorator provides flexible execution of the target function, either in a separate thread or synchronously.
-    By default, the function runs in a thread, but this can be controlled via the 'threaded=False' keyword argument
-    which is removed from kwargs before calling the function.
+    This decorator provides flexible execution of the target function, either in a separate thread or synchronously. By
+    default, the function runs in a thread, but this can be controlled via the 'threaded=False' keyword argument which
+    is removed from kwargs before calling the function.
 
     Args:
         func (callable): The function to be potentially executed in a separate thread.
@@ -1132,8 +1125,7 @@ def threaded(func):
 
 
 def set_sentry():
-    """
-    Initialize the Sentry SDK for error tracking and reporting.
+    """Initialize the Sentry SDK for error tracking and reporting.
 
     Only used if sentry_sdk package is installed and sync=True in settings. Run 'yolo settings' to see and update
     settings.
@@ -1155,18 +1147,17 @@ def set_sentry():
         or TESTS_RUNNING
         or not ONLINE
         or not IS_PIP_PACKAGE
-        or IS_GIT_DIR
+        or GIT.is_repo
     ):
         return
     # If sentry_sdk package is not installed then return and do not use Sentry
     try:
-        import sentry_sdk  # noqa
+        import sentry_sdk
     except ImportError:
         return
 
     def before_send(event, hint):
-        """
-        Modify the event before sending it to Sentry based on specific exception types and messages.
+        """Modify the event before sending it to Sentry based on specific exception types and messages.
 
         Args:
             event (dict): The event dictionary containing information about the error.
@@ -1183,7 +1174,7 @@ def set_sentry():
         event["tags"] = {
             "sys_argv": ARGV[0],
             "sys_argv_name": Path(ARGV[0]).name,
-            "install": "git" if IS_GIT_DIR else "pip" if IS_PIP_PACKAGE else "other",
+            "install": "git" if GIT.is_repo else "pip" if IS_PIP_PACKAGE else "other",
             "os": ENVIRONMENT,
         }
         return event
@@ -1202,8 +1193,7 @@ def set_sentry():
 
 
 class JSONDict(dict):
-    """
-    A dictionary-like class that provides JSON persistence for its contents.
+    """A dictionary-like class that provides JSON persistence for its contents.
 
     This class extends the built-in dictionary to automatically save its contents to a JSON file whenever they are
     modified. It ensures thread-safe operations using a lock and handles JSON serialization of Path objects.
@@ -1230,7 +1220,7 @@ class JSONDict(dict):
         >>> json_dict.clear()
     """
 
-    def __init__(self, file_path: Union[str, Path] = "data.json"):
+    def __init__(self, file_path: str | Path = "data.json"):
         """Initialize a JSONDict object with a specified file path for JSON persistence."""
         super().__init__()
         self.file_path = Path(file_path)
@@ -1242,7 +1232,8 @@ class JSONDict(dict):
         try:
             if self.file_path.exists():
                 with open(self.file_path) as f:
-                    self.update(json.load(f))
+                    # Use the base dict update to avoid persisting during reads
+                    super().update(json.load(f))
         except json.JSONDecodeError:
             LOGGER.warning(f"Error decoding JSON from {self.file_path}. Starting with an empty dictionary.")
         except Exception as e:
@@ -1295,8 +1286,7 @@ class JSONDict(dict):
 
 
 class SettingsManager(JSONDict):
-    """
-    SettingsManager class for managing and persisting Ultralytics settings.
+    """SettingsManager class for managing and persisting Ultralytics settings.
 
     This class extends JSONDict to provide JSON persistence for settings, ensuring thread-safe operations and default
     values. It validates settings on initialization and provides methods to update or reset settings. The settings
@@ -1328,8 +1318,8 @@ class SettingsManager(JSONDict):
 
         from ultralytics.utils.torch_utils import torch_distributed_zero_first
 
-        root = GIT_DIR or Path()
-        datasets_root = (root.parent if GIT_DIR and is_dir_writeable(root.parent) else root).resolve()
+        root = GIT.root or Path()
+        datasets_root = (root.parent if GIT.root and is_dir_writeable(root.parent) else root).resolve()
 
         self.file = Path(file)
         self.version = version
@@ -1417,7 +1407,7 @@ class SettingsManager(JSONDict):
 
 def deprecation_warn(arg, new_arg=None):
     """Issue a deprecation warning when a deprecated argument is used, suggesting an updated argument."""
-    msg = f"'{arg}' is deprecated and will be removed in in the future."
+    msg = f"'{arg}' is deprecated and will be removed in the future."
     if new_arg is not None:
         msg += f" Use '{new_arg}' instead."
     LOGGER.warning(msg)

@@ -1,9 +1,10 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Functions for estimating the best YOLO batch size to use a fraction of the available CUDA memory in PyTorch."""
 
+from __future__ import annotations
+
 import os
 from copy import deepcopy
-from typing import Union
 
 import numpy as np
 import torch
@@ -16,11 +17,10 @@ def check_train_batch_size(
     model: torch.nn.Module,
     imgsz: int = 640,
     amp: bool = True,
-    batch: Union[int, float] = -1,
+    batch: int | float = -1,
     max_num_obj: int = 1,
 ) -> int:
-    """
-    Compute optimal YOLO training batch size using the autobatch() function.
+    """Compute optimal YOLO training batch size using the autobatch() function.
 
     Args:
         model (torch.nn.Module): YOLO model to check batch size for.
@@ -49,8 +49,7 @@ def autobatch(
     batch_size: int = DEFAULT_CFG.batch,
     max_num_obj: int = 1,
 ) -> int:
-    """
-    Automatically estimate the best YOLO batch size to use a fraction of the available CUDA memory.
+    """Automatically estimate the best YOLO batch size to use a fraction of the available CUDA memory.
 
     Args:
         model (torch.nn.Module): YOLO model to compute batch size for.
@@ -85,8 +84,9 @@ def autobatch(
 
     # Profile batch sizes
     batch_sizes = [1, 2, 4, 8, 16] if t < 16 else [1, 2, 4, 8, 16, 32, 64]
+    ch = model.yaml.get("channels", 3)
     try:
-        img = [torch.empty(b, 3, imgsz, imgsz) for b in batch_sizes]
+        img = [torch.empty(b, ch, imgsz, imgsz) for b in batch_sizes]
         results = profile_ops(img, model, n=1, device=device, max_num_obj=max_num_obj)
 
         # Fit a solution
