@@ -497,7 +497,7 @@ class LoadPilAndNumpy:
         Loaded 2 images
     """
 
-    def __init__(self, im0: Image.Image | np.ndarray | list, channels: int = 3):
+    def __init__(self, im0: Image.Image | np.ndarray | list,batch: int = 1,  channels: int = 3):
         """Initialize a loader for PIL and Numpy images, converting inputs to a standardized format.
 
         Args:
@@ -511,7 +511,8 @@ class LoadPilAndNumpy:
         pil_flag = "L" if channels == 1 else "RGB"  # grayscale or RGB
         self.im0 = [self._single_check(im, pil_flag) for im in im0]
         self.mode = "image"
-        self.bs = len(self.im0)
+        self.bs = batch
+        self.nf = len(self.im0)
 
     @staticmethod
     def _single_check(im: Image.Image | np.ndarray, flag: str = "RGB") -> np.ndarray:
@@ -537,10 +538,30 @@ class LoadPilAndNumpy:
 
     def __next__(self) -> tuple[list[str], list[np.ndarray], list[str]]:
         """Return the next batch of images, paths, and metadata for processing."""
-        if self.count == 1:  # loop only once as it's batch inference
-            raise StopIteration
-        self.count += 1
-        return self.paths, self.im0, [""] * self.bs
+        # if self.count == 1:  # loop only once as it's batch inference
+        #     raise StopIteration
+        # self.count += 1
+        # return self.paths, self.im0, [""] * self.bs
+
+        paths, imgs, info = [], [], []
+        while len(imgs) < self.bs:
+            if self.count >= self.nf:  # end of file list
+                if imgs:
+                    return paths, imgs, info  # return last partial batch
+                else:
+                    raise StopIteration
+            img = self.im0[self.count]
+            path = self.paths[self.count]
+            if img is None:
+                LOGGER.warning(f"Image Read Error {path}")
+            else:
+                paths.append(path)
+                imgs.append(img)
+                info.append(f"image {self.count + 1}/{self.nf} {path}: ")
+            self.count += 1  # move to the next file
+            if self.count >= self.nf:  # end of image list
+                break
+        return paths, imgs, info
 
     def __iter__(self):
         """Iterate through PIL/numpy images, yielding paths, raw images, and metadata for processing."""

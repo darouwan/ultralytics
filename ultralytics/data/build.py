@@ -428,7 +428,7 @@ def load_inference_source(
     elif screenshot:
         dataset = LoadScreenshots(source, channels=channels)
     elif from_img:
-        dataset = LoadPilAndNumpy(source, channels=channels)
+        dataset = LoadPilAndNumpy(source,batch=batch, channels=channels)
     else:
         dataset = LoadImagesAndVideos(source, batch=batch, vid_stride=vid_stride, channels=channels)
 
