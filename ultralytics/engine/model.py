@@ -525,9 +525,7 @@ class Model(torch.nn.Module):
         args = {**self.overrides, **custom, **kwargs}  # highest priority args on the right
         prompts = args.pop("prompts", None)  # for SAM-type models
 
-        if_set_batch_explicitly = False
-        if "batch" in kwargs:
-            if_set_batch_explicitly = True
+        if_set_batch_explicitly = "batch" in kwargs
 
         if not self.predictor or self.predictor.args.device != args.get("device", self.predictor.args.device):
             self.predictor = (predictor or self._smart_load("predictor"))(overrides=args, _callbacks=self.callbacks, if_set_batch_explicitly=if_set_batch_explicitly)
