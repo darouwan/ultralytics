@@ -122,6 +122,7 @@ class BasePredictor:
             cfg (str | Path | dict | SimpleNamespace): Path to a configuration file or a configuration dictionary.
             overrides (dict, optional): Configuration overrides.
             _callbacks (dict, optional): Dictionary of callback functions.
+            if_set_batch_explicitly (bool, optional): Whether batch size was explicitly set.
         """
         self.args = get_cfg(cfg, overrides)
         self.save_dir = get_save_dir(self.args)
