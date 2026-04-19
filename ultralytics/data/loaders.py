@@ -502,6 +502,7 @@ class LoadPilAndNumpy:
 
         Args:
             im0 (PIL.Image.Image | np.ndarray | list): Single image or list of images in PIL or numpy format.
+            batch (int): Batch size for processing.
             channels (int): Number of image channels (1 for grayscale, 3 for color).
             if_set_batch_explicitly (bool): Whether batch size was explicitly set.
         """
