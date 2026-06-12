@@ -202,12 +202,12 @@ class DetectionValidator(BaseValidator):
                 self.confusion_matrix.process_batch(predn, pbatch, conf=self.args.conf)
                 if self.args.visualize:
                     # self.confusion_matrix.plot_matches(
-                        batch["img"][si],
-                        pbatch["im_file"],
-                        self.save_dir,
-                        self.args.show_labels,
-                        self.args.show_conf,
-                    )
+                    #     batch["img"][si],
+                    #     pbatch["im_file"],
+                    #     self.save_dir,
+                    #     self.args.show_labels,
+                    #     self.args.show_conf,
+                    # )
                     self.output_bad_cases(predn, labelsn, batch, si, conf=self.args.conf)
 
             if no_pred:

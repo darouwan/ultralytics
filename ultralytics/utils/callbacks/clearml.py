@@ -52,6 +52,20 @@ def _log_plot(title: str, plot_path: str) -> None:
         title=title, series="", figure=fig, report_interactive=False
     )
 
+def _log_visualization(files, title: str = "Debug Samples") -> None:
+    """Log files (images) as debug samples in the ClearML task.
+
+    Args:
+        files (list[Path]): A list of file paths in PosixPath format.
+        title (str): A title that groups together images with the same values.
+    """
+    import re
+
+    if task := Task.current_task():
+        for f in files:
+            if f.exists():
+                task.get_logger().report_image(title=title, series=f.name, local_path=str(f))
+
 
 def on_pretrain_routine_start(trainer) -> None:
     """Initialize and connect ClearML task at the start of pretraining routine."""
@@ -126,6 +140,11 @@ def on_train_end(trainer) -> None:
         for f in [*trainer.plots.keys(), *trainer.validator.plots.keys()]:
             if "batch" not in f.name:
                 _log_plot(title=f.stem, plot_path=f)
+        #  Log visualization result images
+        visualizations_path = trainer.save_dir / 'visualizations'
+        if visualizations_path.exists():
+            _log_visualization(sorted(visualizations_path.glob("false_negative/*.jpg")), "false_negative")
+            _log_visualization(sorted(visualizations_path.glob("false_positive/*.jpg")), "false_positive")
         # Report final metrics
         for k, v in trainer.validator.metrics.results_dict.items():
             task.get_logger().report_single_value(k, v)
