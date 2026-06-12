@@ -142,16 +142,16 @@ def on_train_end(trainer) -> None:
             if "batch" not in f.name:
                 _log_plot(title=f.stem, plot_path=f)
         #  Log visualization result images
-        visualizations_path = trainer.save_dir / 'visualizations'
-        if visualizations_path.exists():
-            _log_visualization(sorted(visualizations_path.glob("false_negative/*.jpg")), "false_negative")
-            _log_visualization(sorted(visualizations_path.glob("false_positive/*.jpg")), "false_positive")
         # Report final metrics
         for k, v in trainer.validator.metrics.results_dict.items():
             task.get_logger().report_single_value(k, v)
         # Log the final model
         if not trainer.args.privacy_mode:
             task.update_output_model(model_path=str(trainer.best), model_name=trainer.args.name, auto_delete_file=False)
+            visualizations_path = trainer.save_dir / 'visualizations'
+            if visualizations_path.exists():
+                _log_visualization(sorted(visualizations_path.glob("false_negative/*.jpg")), "false_negative")
+                _log_visualization(sorted(visualizations_path.glob("false_positive/*.jpg")), "false_positive")
 
 
 callbacks = (
