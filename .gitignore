@@ -204,6 +204,9 @@ calibration_*.npy
 args.yaml
 results.csv
 
+# CI test asset cache
+.ultralytics_cache/
+
 # Projects folder
 projects/
 train*.py
