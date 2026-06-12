@@ -150,8 +150,8 @@ def on_train_end(trainer) -> None:
             task.update_output_model(model_path=str(trainer.best), model_name=trainer.args.name, auto_delete_file=False)
             visualizations_path = trainer.save_dir / 'visualizations'
             if visualizations_path.exists():
-                _log_visualization(sorted(visualizations_path.glob("false_negative/*.jpg")), "false_negative")
-                _log_visualization(sorted(visualizations_path.glob("false_positive/*.jpg")), "false_positive")
+                _log_visualization(sorted(visualizations_path.glob("false_negative/*.jpg")), "False Negative")
+                _log_visualization(sorted(visualizations_path.glob("false_positive/*.jpg")), "False Positive")
 
 
 callbacks = (
